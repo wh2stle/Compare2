@@ -1,23 +1,23 @@
-Attribute VB_Name = "Compare_Modul01"
 Option Explicit
 
-' CATIA V5 / CATVBA - Module 01 - v1.0
-' Import this file with File > Import File in the CATIA VBA editor.
+' CATIA V5 / CATVBA - Module 01 - v1.1
+' Paste the complete code into one standard module in the CATIA VBA editor.
 ' Run CATMain (or M01_Baslat). No UserForm or Windows API declaration needed.
 ' ASCII source + Windows CRLF: safe for the VBA editor's ANSI importer.
 '
 ' PURPOSE
 ' Select two saved CATPart/CATProduct paths; reuse open documents if present.
 ' Build an unsaved inspection CATProduct and inspect every part occurrence.
-' Confirm accessible, active, updated Part Design solids using a Reference.
+' Confirm active Part Design features are current, then measure Body volume.
 ' The report distinguishes verified solids from unreadable/unverified bodies.
 '
 ' SCOPE
-' Native Body objects in Parts, Bodies, GS and OGS containers are visited.
+' Native Body objects are found by CATPrtSearch.Body within each occurrence.
+' No OrderedGeometricalSets collection access is required.
 ' Boolean operands are not counted separately from the resulting body.
 ' Empty and inactive bodies are reported and skipped. Hidden bodies are read.
 ' Standalone GSD geometry, CGR, V4 and alternate representations are not solids
-' validated by this module. Their presence is reported for later review.
+' validated by this module. Standalone GSD elements are not inventoried.
 ' Counts are per assembly occurrence: a bolt used twice counts twice.
 ' No bounding box, flattening, cubes, Boolean operation or difference test.
 '
@@ -42,7 +42,7 @@ Option Explicit
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/ProductStructureInterfaces/interface_Products_41084.htm
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/ProductStructureInterfaces/enum_CatWorkModeType_45790.htm
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/MecModInterfaces/interface_Part_16738.htm
-' https://catiadesign.org/_doc/V5Automation/generated/interfaces/MecModInterfaces/interface_OrderedGeometricalSet_37698.htm
+' https://catiadesign.org/_doc/V5Automation/generated/interfaces/InfInterfaces/interface_Selection_15704.htm
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/SpaceAnalysisInterfaces/interface_SPAWorkbench_36841.htm
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/SpaceAnalysisInterfaces/interface_Measurable_34815.htm
 ' https://catiadesign.org/_doc/V5Automation/generated/interfaces/InfInterfaces/interface_VisPropertySet_21585.htm
@@ -67,13 +67,12 @@ Private Type M01_Stats
     InactiveBodies As Long
     BooleanOperands As Long
     UnverifiedBodies As Long
-    NonBodyShapes As Long
     EmptyProducts As Long
     Errors As Long
     Warnings As Long
 End Type
 
-Private mApp As Object
+Private mApp As Object, mScanDoc As Object
 Private mLog As Collection
 Private mRunning As Boolean
 Private mStage As String
@@ -107,8 +106,9 @@ Public Sub M01_Baslat()
     mFirstIssue = ""
     mLastSummary = ""
     mReportPath = ""
-    LogLine M01_TITLE & " | v1.0 | " & mRunId
+    LogLine M01_TITLE & " | v1.1 | " & mRunId
     LogLine "Kapsam: native Part Design Body; sayilar instance bazindadir."
+    LogLine "Govde disi GS/GSD sonuclari taranmaz ve kati olarak dogrulanmaz."
     LogLine "Otomatik hizalama yapilmaz; belge orijinleri ortak kullanilir."
     LogLine "Gizli Body'ler okunur; kaynak gorunurlukleri degistirilmez."
 
@@ -131,6 +131,7 @@ Public Sub M01_Baslat()
 
     SetStage "03 - Kontrol montajinin olusturulmasi"
     Set resultDoc = mApp.Documents.Add("Product")
+    Set mScanDoc = resultDoc
     Set resultRoot = resultDoc.Product
     resultRoot.PartNumber = M01_PREFIX & mRunId
     Set groupA = resultRoot.Products.AddNewProduct(M01_GROUP_A)
@@ -180,7 +181,8 @@ Public Sub M01_Baslat()
                    StatsText("A - Orijinal", statsA) & vbCrLf & vbCrLf & _
                    StatsText("B - Revize", statsB) & vbCrLf & vbCrLf & _
                    "A: kirmizi | B: yesil. Orijinler ortak." & vbCrLf & _
-                   "Yerlesimi gozle kontrol et; bu bir fark analizi degildir."
+                   "Yerlesimi gozle kontrol et; bu bir fark analizi degildir." & vbCrLf & _
+                   "Kapsam: native Body. Govde disi yuzeyler dogrulanmaz."
     LogLine mLastSummary
     LogLine "Gorunum: M01_SadeceA / M01_SadeceB / M01_IkisiniGoster"
     LogLine "Kaynak belgeler kaydedilmedi; sonuc montaji da kaydedilmedi."
@@ -375,7 +377,7 @@ Private Sub ScanNode(ByVal occurrence As Object, ByVal treePath As String, _
     End If
     If TypeName(owner) = "PartDocument" Then
         stats.PartInstances = stats.PartInstances + 1
-        ScanPart owner, treePath, stats
+        ScanPart owner, treePath, stats, occurrence
     ElseIf occurrence.HasAMasterShapeRepresentation() Then
         AddIssue stats, treePath, 0, _
                  "Temsil var ama erisilebilir CATPart yok (CGR/V4/eksik link olabilir).", True
@@ -417,146 +419,162 @@ Failed:
 End Sub
 
 Private Sub ScanPart(ByVal partDoc As Object, ByVal treePath As String, _
-                     ByRef stats As M01_Stats)
-    Dim part As Object, spa As Object
-    Dim solidsBefore As Long, bodiesBefore As Long
-    Dim spaError As Long, spaText As String
+                     ByRef stats As M01_Stats, ByVal occurrence As Object)
+    Dim part As Object, spa As Object, selection As Object, body As Object
+    Dim bodies As Collection, roots As Object
+    Dim i As Long, count As Long, solidsBefore As Long
+    Dim check As String, errorNumber As Long, errorText As String
     On Error GoTo Failed
+    check = "P01"
     Set part = partDoc.Part
+    If part Is Nothing Then Err.Raise 91, M01_TITLE, "Part alinamadi."
     LogLine "PART: " & treePath & " | " & DocumentPath(partDoc)
     NoteSavedState partDoc
-    On Error Resume Next
-    Err.Clear
-    Set spa = partDoc.GetWorkbench("SPAWorkbench")
-    spaError = Err.Number
-    spaText = Err.Description
-    Err.Clear
-    On Error GoTo Failed
-    If spaError <> 0 Or spa Is Nothing Then
-        AddIssue stats, "Olcum erisimi / " & treePath, spaError, _
-                 "SPAWorkbench alinamadi. " & spaText, True
+
+    check = "P02"
+    mScanDoc.Activate
+    Set selection = mScanDoc.Selection
+    selection.Clear
+    selection.Add occurrence
+    If selection.Count2 <> 1 Then
+        Err.Raise vbObjectError + 2120, M01_TITLE, "Arama kapsami secilemedi."
     End If
+    check = "P03"
+    selection.Search "CATPrtSearch.Body,sel"
+    count = selection.Count2
+    If count > M01_MAX_NODES Then
+        Err.Raise vbObjectError + 2121, M01_TITLE, "Body arama siniri asildi."
+    End If
+    Set bodies = New Collection
+    For i = 1 To count
+        Set body = selection.Item2(i).Value
+        If TypeName(body) <> "Body" Then
+            Err.Raise vbObjectError + 2122, M01_TITLE, "Arama sonucu Body degil."
+        End If
+        If Not M01_HasBody(bodies, body) Then bodies.Add body
+    Next i
+    selection.Clear
+
+    ' Cross-check the search against the directly accessible root Bodies.
+    check = "P04"
+    Set roots = part.Bodies
+    For i = 1 To roots.Count
+        Set body = roots.Item(i)
+        If Not M01_HasBody(bodies, body) Then
+            Err.Raise vbObjectError + 2123, M01_TITLE, _
+                      "Arama kok Body'lerden birini bulamadi: " & ObjectName(body)
+        End If
+    Next i
+    If bodies.Count = 0 Then
+        AddIssue stats, "P04 / " & treePath, 0, "Native Body bulunamadi.", False
+        Exit Sub
+    End If
+
+    check = "P05"
+    Set spa = partDoc.GetWorkbench("SPAWorkbench")
+    If spa Is Nothing Then Err.Raise 91, M01_TITLE, "SPAWorkbench alinamadi."
     solidsBefore = stats.Solids
-    bodiesBefore = stats.Bodies
-    ScanContainer part, "Part", part, spa, treePath, stats, 0
-    If stats.Bodies = bodiesBefore Then
-        AddIssue stats, treePath, 0, "Bu Part icinde native Body bulunamadi.", False
-    ElseIf stats.Solids = solidsBefore Then
+    For i = 1 To bodies.Count
+        Set body = bodies.Item(i)
+        InspectBody part, spa, body, treePath & "/" & ObjectName(body) & _
+                    "[" & CStr(i) & "]", stats
+    Next i
+    If stats.Solids = solidsBefore Then
         AddIssue stats, treePath, 0, "Bu Part icin kati Body dogrulanamadi.", False
     End If
     Exit Sub
 Failed:
-    AddIssue stats, "Part erisimi / " & treePath, Err.Number, Err.Description, True
+    errorNumber = Err.Number
+    errorText = Err.Description
+    ClearSelectionQuietly mScanDoc
+    AddIssue stats, check & " / " & treePath, errorNumber, errorText, True
 End Sub
 
-' ---------- 04. Native Bodies inside Part / Body / GS / OGS ----------
-
-Private Sub ScanContainer(ByVal container As Object, ByVal kind As String, _
-                          ByVal part As Object, ByVal spa As Object, _
-                          ByVal treePath As String, ByRef stats As M01_Stats, _
-                          ByVal depth As Long)
-    Dim looseCount As Long
-    On Error GoTo Failed
-    If depth > M01_MAX_DEPTH Then
-        AddIssue stats, treePath, 0, "Govde agaci derinlik sinirina ulasti.", True
-        Exit Sub
-    End If
-
-    ' Only request collections documented for this container type.
-    If kind <> "Body" Then
-        VisitCollection container, "Bodies", "Body", part, spa, treePath, stats, depth
-    End If
-    If kind = "Part" Or kind = "Body" Or kind = "HybridBody" Then
-        VisitCollection container, "HybridBodies", "HybridBody", _
-                        part, spa, treePath, stats, depth
-    End If
-    If kind = "Part" Or kind = "Body" Or kind = "OrderedGeometricalSet" Then
-        VisitCollection container, "OrderedGeometricalSets", "OrderedGeometricalSet", _
-                        part, spa, treePath, stats, depth
-    End If
-    If kind = "HybridBody" Or kind = "OrderedGeometricalSet" Then
-        looseCount = container.HybridShapes.Count
-        If looseCount > 0 Then
-            stats.NonBodyShapes = stats.NonBodyShapes + looseCount
-            AddIssue stats, treePath, 0, CStr(looseCount) & _
-                     " govde disi GSD elemani var; kati sonuc olarak dogrulanmadi.", False
+Private Function M01_HasBody(ByVal bodies As Collection, ByVal body As Object) As Boolean
+    Dim existing As Object
+    For Each existing In bodies
+        If existing Is body Then
+            M01_HasBody = True
+            Exit Function
         End If
-    End If
-    Exit Sub
-Failed:
-    AddIssue stats, "Geometri agaci / " & treePath, Err.Number, Err.Description, True
-End Sub
+    Next existing
+End Function
 
-Private Sub VisitCollection(ByVal container As Object, ByVal propertyName As String, _
-                            ByVal childKind As String, ByVal part As Object, _
-                            ByVal spa As Object, ByVal treePath As String, _
-                            ByRef stats As M01_Stats, ByVal depth As Long)
-    Dim items As Object, item As Object
-    Dim i As Long, count As Long
-    Dim why As String, childPath As String
-    On Error GoTo Failed
-    Set items = CallByName(container, propertyName, VbGet)
-    count = items.Count
-    For i = 1 To count
-        Set item = Nothing
-        why = ""
-        If GetItem(items, i, item, why) Then
-            childPath = treePath & "/" & ObjectName(item) & "[" & CStr(i) & "]"
-            If childKind = "Body" Then InspectBody part, spa, item, childPath, stats
-            ScanContainer item, childKind, part, spa, childPath, stats, depth + 1
-        Else
-            AddIssue stats, treePath & "/" & propertyName & "[" & CStr(i) & "]", _
-                     0, why, True
-        End If
-    Next i
-    Exit Sub
-Failed:
-    AddIssue stats, treePath & "/" & propertyName, Err.Number, Err.Description, True
-End Sub
+' ---------- 04. Active features and measurable native Body solids ----------
 
 Private Sub InspectBody(ByVal part As Object, ByVal spa As Object, _
                         ByVal body As Object, ByVal treePath As String, _
                         ByRef stats As M01_Stats)
-    Dim reference As Object, measurable As Object
-    Dim volumeM3 As Double
+    Dim shapes As Object, feature As Object, reference As Object, measurable As Object
+    Dim volumeM3 As Double, i As Long, count As Long, activeCount As Long
+    Dim check As String, errorNumber As Long, errorText As String
     On Error GoTo Unverified
     stats.Bodies = stats.Bodies + 1
     mStage = "05 - Body kontrolu: " & treePath
+    check = "B01"
     If body.InBooleanOperation Then
         stats.BooleanOperands = stats.BooleanOperands + 1
         LogLine "ATLANDI (Boolean girdisi): " & treePath
         Exit Sub
     End If
+    check = "B02"
     If part.IsInactive(body) Then
         stats.InactiveBodies = stats.InactiveBodies + 1
         LogLine "ATLANDI (pasif Body): " & treePath
         Exit Sub
     End If
-    If body.Shapes.Count = 0 Then
+    check = "B03"
+    Set shapes = body.Shapes
+    If shapes Is Nothing Then Err.Raise 91, M01_TITLE, "Shapes alinamadi."
+    count = shapes.Count
+    If count = 0 Then
         stats.EmptyBodies = stats.EmptyBodies + 1
         LogLine "ATLANDI (bos Body): " & treePath
         Exit Sub
     End If
-    If Not part.IsUpToDate(body) Then
-        Err.Raise vbObjectError + 2107, M01_TITLE, _
-                  "Body guncel degil; otomatik Update yapilmadi."
+
+    ' Check modelling features, not the Body container.
+    For i = 1 To count
+        check = "B04." & CStr(i)
+        Set feature = shapes.Item(i)
+        If feature Is Nothing Then Err.Raise 91, M01_TITLE, "Shape alinamadi."
+        check = "B05." & CStr(i)
+        If Not part.IsInactive(feature) Then
+            activeCount = activeCount + 1
+            check = "B06." & CStr(i)
+            If Not part.IsUpToDate(feature) Then
+                Err.Raise vbObjectError + 2107, M01_TITLE, _
+                          "Feature guncel degil: " & ObjectName(feature)
+            End If
+        End If
+    Next i
+    If activeCount = 0 Then
+        stats.InactiveBodies = stats.InactiveBodies + 1
+        LogLine "ATLANDI (aktif Shape yok): " & treePath
+        Exit Sub
     End If
-    If spa Is Nothing Then
-        Err.Raise vbObjectError + 2108, M01_TITLE, "Olcum arayuzu kullanilamiyor."
-    End If
+
+    check = "B07"
+    If spa Is Nothing Then Err.Raise 91, M01_TITLE, "Olcum arayuzu alinamadi."
     Set reference = part.CreateReferenceFromObject(body)
+    If reference Is Nothing Then Err.Raise 91, M01_TITLE, "Body referansi alinamadi."
+    check = "B08"
     Set measurable = spa.GetMeasurable(reference)
+    If measurable Is Nothing Then Err.Raise 91, M01_TITLE, "Measurable alinamadi."
+    check = "B09"
     volumeM3 = CDbl(measurable.Volume)
     If volumeM3 <= 0# Then
-        Err.Raise vbObjectError + 2109, M01_TITLE, "Body icin pozitif kati hacim yok."
+        Err.Raise vbObjectError + 2109, M01_TITLE, "Pozitif kati hacim yok."
     End If
     stats.Solids = stats.Solids + 1
     LogLine "KATI OK: " & treePath & " | hacim(mm^3)=" & _
             Format$(volumeM3 * 1000000000#, "0.000000")
     Exit Sub
 Unverified:
+    errorNumber = Err.Number
+    errorText = Err.Description
     stats.UnverifiedBodies = stats.UnverifiedBodies + 1
-    AddIssue stats, "Body dogrulanamadi / " & treePath, Err.Number, Err.Description, True
+    AddIssue stats, check & " / " & treePath, errorNumber, errorText, True
 End Sub
 
 ' ---------- 05. Colors and visibility on NEW wrappers ----------
@@ -656,6 +674,7 @@ Private Sub AddIssue(ByRef stats As M01_Stats, ByVal location As String, _
                      ByVal number As Long, ByVal description As String, _
                      ByVal blocking As Boolean)
     Dim prefix As String, message As String
+    If number = 91 Then MsgBox location, vbExclamation, "91 - Hata yeri"
     If blocking Then
         stats.Errors = stats.Errors + 1
         prefix = "HATA"
