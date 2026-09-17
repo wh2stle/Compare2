@@ -805,3 +805,163 @@ Private Function GetItem(ByVal items As Object, ByVal index As Long, _
 Failed:
     why = CStr(Err.Number) & " | " & Err.Description
 End Function
+Public Sub M01_Tani()
+
+    Dim doc As Object
+    Dim part As Object
+    Dim body As Object
+    Dim firstFeature As Object
+    Dim lastFeature As Object
+    Dim report As String
+    Dim stage As String
+
+    On Error GoTo Failed
+
+    stage = "T01 - Belge"
+    Set doc = CATIA.ActiveDocument
+
+    If TypeName(doc) <> "PartDocument" Then
+        MsgBox "Window menusunden kaynak CATPart penceresini sec." & _
+               vbCrLf & "Sonra M01_Tani makrosunu tekrar calistir.", _
+               vbExclamation, "M01 TANI"
+        Exit Sub
+    End If
+
+    stage = "T02 - PartBody"
+    Set part = doc.Part
+    Set body = part.MainBody
+
+    If body.Shapes.Count = 0 Then
+        MsgBox "MainBody icinde Shape yok.", vbExclamation, "M01 TANI"
+        Exit Sub
+    End If
+
+    Set firstFeature = body.Shapes.Item(1)
+
+    report = "M01 TANI - CATPart penceresi" & vbCrLf & _
+             "Dosya: " & Left$(CStr(doc.Name), 50) & vbCrLf & _
+             "Hedef: " & Left$(CStr(firstFeature.Name), 50) & _
+             vbCrLf & vbCrLf
+
+    report = report & "1 ONCE: " & _
+             M01_TaniDurum(part, firstFeature) & vbCrLf
+
+    report = report & "2 TAM UPDATE: " & _
+             M01_TaniUpdate(part) & vbCrLf
+
+    report = report & "3 SONRA: " & _
+             M01_TaniDurum(part, firstFeature) & vbCrLf
+
+    report = report & "4 BODY HACMI: " & _
+             M01_TaniHacim(doc, part, body) & vbCrLf
+
+    stage = "T03 - Son Shape"
+    Set lastFeature = body.Shapes.Item(body.Shapes.Count)
+
+    report = report & "5 SON SHAPE (" & _
+             Left$(CStr(lastFeature.Name), 40) & "): " & _
+             M01_TaniHacim(doc, part, lastFeature) & _
+             vbCrLf & vbCrLf
+
+    report = report & "Update bellekte denendi. Dosya kaydedilmedi."
+
+    Debug.Print report
+    MsgBox report, vbInformation, "M01 TANI"
+    Exit Sub
+
+Failed:
+    MsgBox report & vbCrLf & stage & _
+           " | " & CStr(Err.Number) & _
+           " | " & Err.Description, vbExclamation, "M01 TANI"
+
+End Sub
+
+
+Private Function M01_TaniDurum(ByVal part As Object, _
+                               ByVal feature As Object) As String
+
+    Dim raw As Variant
+
+    On Error GoTo Failed
+
+    raw = part.IsUpToDate(feature)
+
+    If IsNull(raw) Then
+        M01_TaniDurum = "NULL"
+    ElseIf IsEmpty(raw) Then
+        M01_TaniDurum = "EMPTY"
+    Else
+        M01_TaniDurum = TypeName(raw) & "=" & CStr(raw) & _
+                       "; Boolean=" & CStr(CBool(raw))
+    End If
+
+    Exit Function
+
+Failed:
+    M01_TaniDurum = "HATA " & CStr(Err.Number) & _
+                   " / " & Left$(Err.Description, 70)
+
+End Function
+
+
+Private Function M01_TaniUpdate(ByVal part As Object) As String
+
+    On Error GoTo Failed
+
+    part.Update
+    M01_TaniUpdate = "Cagri hatasiz dondu"
+    Exit Function
+
+Failed:
+    M01_TaniUpdate = "HATA " & CStr(Err.Number) & _
+                    " / " & Left$(Err.Description, 70)
+
+End Function
+
+
+Private Function M01_TaniHacim(ByVal doc As Object, _
+                               ByVal part As Object, _
+                               ByVal obj As Object) As String
+
+    Dim spa As Object
+    Dim reference As Object
+    Dim measurable As Object
+    Dim volumeM3 As Double
+    Dim stage As String
+
+    On Error GoTo Failed
+
+    stage = "V1-SPA"
+    Set spa = doc.GetWorkbench("SPAWorkbench")
+
+    If spa Is Nothing Then
+        Err.Raise 91, , "SPA alinamadi."
+    End If
+
+    stage = "V2-REF"
+    Set reference = part.CreateReferenceFromObject(obj)
+
+    If reference Is Nothing Then
+        Err.Raise 91, , "Referans alinamadi."
+    End If
+
+    stage = "V3-MEAS"
+    Set measurable = spa.GetMeasurable(reference)
+
+    If measurable Is Nothing Then
+        Err.Raise 91, , "Measurable alinamadi."
+    End If
+
+    stage = "V4-VOL"
+    volumeM3 = CDbl(measurable.Volume)
+
+    M01_TaniHacim = _
+        Format$(volumeM3 * 1000000000#, "0.000000E+00") & " mm3"
+
+    Exit Function
+
+Failed:
+    M01_TaniHacim = stage & " HATA " & CStr(Err.Number) & _
+                   " / " & Left$(Err.Description, 70)
+
+End Function
