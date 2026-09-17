@@ -1,0 +1,182 @@
+Private Sub ScanPart(ByVal partDoc As Object, ByVal treePath As String, _
+                     ByRef stats As M01_Stats, ByVal occurrence As Object)
+
+    Dim part As Object, spa As Object, selection As Object, body As Object
+    Dim previousDoc As Object
+    Dim bodies As Collection, roots As Object
+    Dim i As Long, count As Long, solidsBefore As Long
+    Dim check As String, errorNumber As Long, errorText As String
+
+    On Error GoTo Failed
+
+    check = "P00"
+    Set previousDoc = mApp.ActiveDocument
+
+    check = "P02 - CATPart penceresi"
+    M01_ActivatePartDocument partDoc
+
+    check = "P01"
+    Set part = partDoc.Part
+
+    If part Is Nothing Then
+        Err.Raise 91, M01_TITLE, "Part alinamadi."
+    End If
+
+    LogLine "PART: " & treePath & " | " & DocumentPath(partDoc)
+    LogLine "BAGLAM v1.1.4: CATPart penceresi / " & ObjectName(partDoc)
+    NoteSavedState partDoc
+
+    check = "P02S"
+    Set selection = partDoc.Selection
+    selection.Clear
+    selection.Add part
+
+    If selection.Count2 <> 1 Then
+        Err.Raise vbObjectError + 2120, M01_TITLE, _
+                  "Arama kapsami secilemedi."
+    End If
+
+    check = "P03"
+    selection.Search "CATPrtSearch.BodyFeature,sel"
+    count = selection.Count2
+
+    If count > M01_MAX_NODES Then
+        Err.Raise vbObjectError + 2121, M01_TITLE, _
+                  "Body arama siniri asildi."
+    End If
+
+    Set bodies = New Collection
+
+    For i = 1 To count
+        Set body = selection.Item2(i).Value
+
+        If TypeName(body) <> "Body" Then
+            Err.Raise vbObjectError + 2122, M01_TITLE, _
+                      "Arama sonucu Body degil."
+        End If
+
+        If Not M01_HasBody(bodies, body) Then bodies.Add body
+    Next i
+
+    selection.Clear
+
+    check = "P04"
+    Set roots = part.Bodies
+
+    For i = 1 To roots.Count
+        Set body = roots.Item(i)
+
+        If Not M01_HasBody(bodies, body) Then
+            Err.Raise vbObjectError + 2123, M01_TITLE, _
+                      "Arama kok Body'lerden birini bulamadi: " & _
+                      ObjectName(body)
+        End If
+    Next i
+
+    If bodies.Count = 0 Then
+        AddIssue stats, "P04 / " & treePath, 0, _
+                 "Native Body bulunamadi.", False
+        GoTo CleanUp
+    End If
+
+    check = "P05"
+    Set spa = partDoc.GetWorkbench("SPAWorkbench")
+
+    If spa Is Nothing Then
+        Err.Raise 91, M01_TITLE, "SPAWorkbench alinamadi."
+    End If
+
+    solidsBefore = stats.Solids
+
+    For i = 1 To bodies.Count
+        Set body = bodies.Item(i)
+
+        InspectBody part, spa, body, _
+                    treePath & "/" & ObjectName(body) & _
+                    "[" & CStr(i) & "]", stats
+    Next i
+
+    If stats.Solids = solidsBefore Then
+        AddIssue stats, treePath, 0, _
+                 "Bu Part icin kati Body dogrulanamadi.", False
+    End If
+
+    GoTo CleanUp
+
+Failed:
+    errorNumber = Err.Number
+    errorText = Err.Description
+
+    AddIssue stats, check & " / " & treePath, _
+             errorNumber, errorText, True
+
+    Resume CleanUp
+
+CleanUp:
+    On Error Resume Next
+
+    If Not selection Is Nothing Then selection.Clear
+
+    Err.Clear
+    If Not previousDoc Is Nothing Then previousDoc.Activate
+
+    errorNumber = Err.Number
+    errorText = Err.Description
+
+    On Error GoTo 0
+
+    If errorNumber <> 0 Then
+        AddIssue stats, "P07 / " & treePath, errorNumber, _
+                 "Onceki pencereye donulemedi: " & errorText, True
+    End If
+
+End Sub
+
+
+Private Sub M01_ActivatePartDocument(ByVal partDoc As Object)
+
+    Dim activeDoc As Object, openedDoc As Object
+    Dim fullPath As String
+
+    If partDoc Is Nothing Then
+        Err.Raise 91, M01_TITLE, "CATPart belgesi yok."
+    End If
+
+    If TypeName(partDoc) <> "PartDocument" Then
+        Err.Raise vbObjectError + 2124, M01_TITLE, _
+                  "Beklenen belge CATPart degil."
+    End If
+
+    ' Varsa kaynak parcanin kendi penceresini kullan.
+    On Error Resume Next
+    partDoc.Activate
+    Set activeDoc = mApp.ActiveDocument
+    Err.Clear
+    On Error GoTo 0
+
+    If activeDoc Is partDoc Then Exit Sub
+
+    ' Montajdan yuklenen parcanin ayri penceresi olmayabilir.
+    fullPath = DocumentPath(partDoc)
+
+    If Len(fullPath) = 0 Then
+        Err.Raise vbObjectError + 2125, M01_TITLE, _
+                  "CATPart penceresi acilamadi; kaynak dosya yolu yok."
+    End If
+
+    Set openedDoc = mApp.Documents.Open(fullPath)
+
+    If Not openedDoc Is partDoc Then
+        Err.Raise vbObjectError + 2126, M01_TITLE, _
+                  "Acilan CATPart kaynakla ayni oturum nesnesi degil."
+    End If
+
+    openedDoc.Activate
+    Set activeDoc = mApp.ActiveDocument
+
+    If Not activeDoc Is partDoc Then
+        Err.Raise vbObjectError + 2127, M01_TITLE, _
+                  "Kaynak CATPart kendi penceresinde aktiflestirilemedi."
+    End If
+
+End Sub
