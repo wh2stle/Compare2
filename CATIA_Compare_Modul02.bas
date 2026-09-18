@@ -1,6 +1,6 @@
 Option Explicit
 
-' CATIA V5 / CATVBA - Compare Module 02 - v0.1.3
+' CATIA V5 / CATVBA - Compare Module 02 - v0.1.4
 ' Run M02_Baslat while the successful Compare_M01 result is active.
 ' Creates unsaved, independent A/B snapshot CATParts and an unsaved preview CATProduct.
 ' Each accepted source Body is pasted As Result without link into its own destination Body.
@@ -8,7 +8,7 @@ Option Explicit
 ' Volume, center of gravity and rigid transform quality are validated.
 ' No source document and no generated document is saved automatically.
 
-Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.3"
+Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.4"
 Private Const M02_M01_PREFIX As String = "Compare_M01_"
 Private Const M02_PREFIX As String = "Compare_M02_"
 Private Const M02_GROUP_A As String = "A_ORIGINAL"
@@ -58,6 +58,10 @@ Public Sub M02_V012_Baslat()
 End Sub
 
 Public Sub M02_V013_Baslat()
+    M02_Baslat
+End Sub
+
+Public Sub M02_V014_Baslat()
     M02_Baslat
 End Sub
 
@@ -343,9 +347,14 @@ Private Sub M02_CopyOneBody(ByVal sourceDoc As Object, _
     destBody.Name = M02_SafeName("SNAP_" & CStr(stats.CandidateBodies) & _
                                 "_" & M02_Name(sourceBody))
 
-    stage = "C05 global donusum"
+    stage = "C05 global donusum kontrolu"
     M02_CheckRigid worldM, bodyPath
-    M02_ApplyBodyMove destBody, worldM
+    If M02_IsIdentity(worldM) Then
+        M02_Log "DONUSUM ATLANDI (birim matris): " & bodyPath
+    Else
+        stage = "C05A AsResult feature donusumu"
+        M02_ApplyResultMove destBody.Shapes.Item(destBody.Shapes.Count), worldM
+    End If
     destPart.Update
     stats.CopiedBodies = stats.CopiedBodies + 1
 
@@ -513,13 +522,28 @@ Private Sub M02_SetIdentity(ByRef matrix() As Double)
     matrix(8) = 1#
 End Sub
 
-Private Sub M02_ApplyBodyMove(ByVal body As Object, ByRef matrix() As Double)
-    Dim raw(11) As Variant, i As Long
+Private Sub M02_ApplyResultMove(ByVal resultShape As Object, _
+                                ByRef matrix() As Double)
+    Dim raw(11) As Variant, i As Long, moveObject As Object
     For i = 0 To 11
         raw(i) = CDbl(matrix(i))
     Next i
-    body.Move.Apply raw
+    Set moveObject = resultShape.Move
+    If moveObject Is Nothing Then
+        Err.Raise vbObjectError + 2219, M02_TITLE, _
+                  "AsResult feature icin Move nesnesi alinamadi."
+    End If
+    moveObject.Apply raw
 End Sub
+
+Private Function M02_IsIdentity(ByRef matrix() As Double) As Boolean
+    Dim identity(11) As Double, i As Long
+    M02_SetIdentity identity
+    For i = 0 To 11
+        If Abs(matrix(i) - identity(i)) > M02_MATRIX_TOL Then Exit Function
+    Next i
+    M02_IsIdentity = True
+End Function
 
 Private Sub M02_SetOccurrencePosition(ByVal occurrence As Object, _
                                       ByRef matrix() As Double)
