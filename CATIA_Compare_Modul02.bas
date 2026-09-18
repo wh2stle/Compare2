@@ -1,6 +1,6 @@
 Option Explicit
 
-' CATIA V5 / CATVBA - Compare Module 02 - v0.1.0
+' CATIA V5 / CATVBA - Compare Module 02 - v0.1.1
 ' Run M02_Baslat while the successful Compare_M01 result is active.
 ' Creates unsaved, independent A/B snapshot CATParts and an unsaved preview CATProduct.
 ' Each accepted source Body is pasted As Result without link into its own destination Body.
@@ -8,7 +8,7 @@ Option Explicit
 ' Volume, center of gravity and rigid transform quality are validated.
 ' No source document and no generated document is saved automatically.
 
-Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.0"
+Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.1"
 Private Const M02_M01_PREFIX As String = "Compare_M01_"
 Private Const M02_PREFIX As String = "Compare_M02_"
 Private Const M02_GROUP_A As String = "A_ORIGINAL"
@@ -48,6 +48,10 @@ Private m02RunId As String
 Private m02Summary As String
 Private m02FirstIssue As String
 Private m02ReportPath As String
+
+Public Sub M02_V011_Baslat()
+    M02_Baslat
+End Sub
 
 Public Sub M02_Baslat()
     Dim m01Doc As Object, m01Root As Object
@@ -353,21 +357,34 @@ End Sub
 Private Sub M02_MeasureBody(ByVal doc As Object, ByVal part As Object, _
                             ByVal body As Object, ByRef result As M02_Measure)
     Dim spa As Object, reference As Object, measurable As Object
-    Dim cog(2) As Double
+    Dim cog(2) As Variant
+    Dim stage As String, errorNumber As Long, errorText As String
+    On Error GoTo Failed
+    stage = "M01 SPAWorkbench"
     Set spa = doc.GetWorkbench("SPAWorkbench")
     If spa Is Nothing Then Err.Raise 91, M02_TITLE, "SPAWorkbench alinamadi."
+    stage = "M02 Body referansi"
     Set reference = part.CreateReferenceFromObject(body)
     If reference Is Nothing Then Err.Raise 91, M02_TITLE, "Body referansi alinamadi."
+    stage = "M03 Measurable"
     Set measurable = spa.GetMeasurable(reference)
     If measurable Is Nothing Then Err.Raise 91, M02_TITLE, "Measurable alinamadi."
+    stage = "M04 Volume"
     result.VolumeMM3 = CDbl(measurable.Volume) * 1000000000#
     If result.VolumeMM3 <= 0# Then
         Err.Raise vbObjectError + 2212, M02_TITLE, "Pozitif kati hacim yok."
     End If
+    stage = "M05 GetCOG Variant dizisi"
     measurable.GetCOG cog
+    stage = "M06 COG donusumu"
     result.CogX = CDbl(cog(0))
     result.CogY = CDbl(cog(1))
     result.CogZ = CDbl(cog(2))
+    Exit Sub
+Failed:
+    errorNumber = Err.Number
+    errorText = Err.Description
+    Err.Raise errorNumber, M02_TITLE, stage & " | " & errorText
 End Sub
 
 Private Sub M02_VerifyMeasure(ByRef sourceM As M02_Measure, _
