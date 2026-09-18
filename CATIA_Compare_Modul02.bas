@@ -1,6 +1,6 @@
 Option Explicit
 
-' CATIA V5 / CATVBA - Compare Module 02 - v0.1.1
+' CATIA V5 / CATVBA - Compare Module 02 - v0.1.2
 ' Run M02_Baslat while the successful Compare_M01 result is active.
 ' Creates unsaved, independent A/B snapshot CATParts and an unsaved preview CATProduct.
 ' Each accepted source Body is pasted As Result without link into its own destination Body.
@@ -8,7 +8,7 @@ Option Explicit
 ' Volume, center of gravity and rigid transform quality are validated.
 ' No source document and no generated document is saved automatically.
 
-Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.1"
+Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.2"
 Private Const M02_M01_PREFIX As String = "Compare_M01_"
 Private Const M02_PREFIX As String = "Compare_M02_"
 Private Const M02_GROUP_A As String = "A_ORIGINAL"
@@ -50,6 +50,10 @@ Private m02FirstIssue As String
 Private m02ReportPath As String
 
 Public Sub M02_V011_Baslat()
+    M02_Baslat
+End Sub
+
+Public Sub M02_V012_Baslat()
     M02_Baslat
 End Sub
 
@@ -291,13 +295,16 @@ Private Sub M02_CopyOneBody(ByVal sourceDoc As Object, _
     Set sourcePart = sourceDoc.Part
     M02_MeasureBody sourceDoc, sourcePart, sourceBody, sourceMeasure
 
-    stage = "C02 hedef Body"
+    stage = "C02A hedef CATPart aktivasyonu"
     destDoc.Activate
+    stage = "C02B hedef Part"
     Set destPart = destDoc.Part
+    stage = "C02C yeni Body"
     Set destBody = destPart.Bodies.Add
+    stage = "C02D Body adi"
     destBody.Name = M02_SafeName("SNAP_" & CStr(stats.CandidateBodies) & _
                                 "_" & M02_Name(sourceBody))
-    Set destPart.InWorkObject = destBody
+    stage = "C02E Shape sayisi"
     beforeShapes = destBody.Shapes.Count
 
     stage = "C03 Copy"
