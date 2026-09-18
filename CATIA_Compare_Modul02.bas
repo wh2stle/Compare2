@@ -1,6 +1,6 @@
 Option Explicit
 
-' CATIA V5 / CATVBA - Compare Module 02 - v0.1.2
+' CATIA V5 / CATVBA - Compare Module 02 - v0.1.3
 ' Run M02_Baslat while the successful Compare_M01 result is active.
 ' Creates unsaved, independent A/B snapshot CATParts and an unsaved preview CATProduct.
 ' Each accepted source Body is pasted As Result without link into its own destination Body.
@@ -8,7 +8,7 @@ Option Explicit
 ' Volume, center of gravity and rigid transform quality are validated.
 ' No source document and no generated document is saved automatically.
 
-Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.2"
+Private Const M02_TITLE As String = "CATIA Compare - Modul 02 | v0.1.3"
 Private Const M02_M01_PREFIX As String = "Compare_M01_"
 Private Const M02_PREFIX As String = "Compare_M02_"
 Private Const M02_GROUP_A As String = "A_ORIGINAL"
@@ -54,6 +54,10 @@ Public Sub M02_V011_Baslat()
 End Sub
 
 Public Sub M02_V012_Baslat()
+    M02_Baslat
+End Sub
+
+Public Sub M02_V013_Baslat()
     M02_Baslat
 End Sub
 
@@ -286,7 +290,7 @@ Private Sub M02_CopyOneBody(ByVal sourceDoc As Object, _
     Dim sourceSelection As Object, destSelection As Object
     Dim sourceMeasure As M02_Measure, destMeasure As M02_Measure
     Dim expectedX As Double, expectedY As Double, expectedZ As Double
-    Dim beforeShapes As Long, afterShapes As Long
+    Dim beforeBodies As Long, afterBodies As Long, pastedIndex As Long
     Dim stage As String, eNumber As Long, eText As String
 
     On Error GoTo Failed
@@ -299,13 +303,8 @@ Private Sub M02_CopyOneBody(ByVal sourceDoc As Object, _
     destDoc.Activate
     stage = "C02B hedef Part"
     Set destPart = destDoc.Part
-    stage = "C02C yeni Body"
-    Set destBody = destPart.Bodies.Add
-    stage = "C02D Body adi"
-    destBody.Name = M02_SafeName("SNAP_" & CStr(stats.CandidateBodies) & _
-                                "_" & M02_Name(sourceBody))
-    stage = "C02E Shape sayisi"
-    beforeShapes = destBody.Shapes.Count
+    stage = "C02C mevcut Body sayisi"
+    beforeBodies = destPart.Bodies.Count
 
     stage = "C03 Copy"
     M02_ActivatePart sourceDoc
@@ -321,15 +320,28 @@ Private Sub M02_CopyOneBody(ByVal sourceDoc As Object, _
     destDoc.Activate
     Set destSelection = destDoc.Selection
     destSelection.Clear
-    destSelection.Add destBody
+    destSelection.Add destPart
     destSelection.PasteSpecial "CATPrtResultWithOutLink"
     destSelection.Clear
     destPart.Update
-    afterShapes = destBody.Shapes.Count
-    If afterShapes <= beforeShapes Then
+    stage = "C04A olusan Body"
+    afterBodies = destPart.Bodies.Count
+    If afterBodies <= beforeBodies Then
         Err.Raise vbObjectError + 2211, M02_TITLE, _
-                  "AsResult hedef Body icinde Shape olusturmadi."
+                  "AsResult yeni bir Body olusturmadi."
     End If
+    For pastedIndex = beforeBodies + 1 To afterBodies
+        Set destBody = destPart.Bodies.Item(pastedIndex)
+        If destBody.Shapes.Count > 0 Then Exit For
+        Set destBody = Nothing
+    Next pastedIndex
+    If destBody Is Nothing Then
+        Err.Raise vbObjectError + 2211, M02_TITLE, _
+                  "AsResult yeni Body olusturdu fakat icinde Shape yok."
+    End If
+    stage = "C04B olusan Body adi"
+    destBody.Name = M02_SafeName("SNAP_" & CStr(stats.CandidateBodies) & _
+                                "_" & M02_Name(sourceBody))
 
     stage = "C05 global donusum"
     M02_CheckRigid worldM, bodyPath
